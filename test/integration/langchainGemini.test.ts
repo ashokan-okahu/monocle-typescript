@@ -35,7 +35,7 @@ describe('Gemini Sample', () => {
         // Run the sample code
         await (await import('../examples/langchainGeminiChat.js')).main();
 
-        // Wait for async operations to complete
+        // Wait for the BatchSpanProcessor to flush (~5s timer).
         await new Promise(resolve => setTimeout(resolve, 5000));
 
         const sortedExpectedSpans = sortSpans(expectedSpans);
@@ -59,5 +59,5 @@ describe('Gemini Sample', () => {
 
         // Verify count matches
         expect(sortedCapturedLogs.length).toBe(sortedExpectedSpans.length);
-    });
+    }, 60000);
 });
