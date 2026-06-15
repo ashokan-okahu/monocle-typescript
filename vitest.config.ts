@@ -1,5 +1,6 @@
 import { defineConfig } from "vitest/config";
 import { configDefaults } from "vitest/config";
+import ("dotenv/config");  // auto-loads .env from cwd
 
 export default defineConfig({
   test: {
@@ -8,6 +9,7 @@ export default defineConfig({
     exclude: [
       ...configDefaults.exclude,
       "test/integration/langgraph.test.ts",
+      "test/integration/azure-openai.test.ts",
     ],
     coverage: {
       provider: 'v8',

@@ -10,6 +10,9 @@ tmp/
 # Coverage
 coverage/
 
+# Test reports
+reports/
+
 # Logs
 logs
 *.log
@@ -28,6 +31,12 @@ yarn-error.log*
 
 # OS
 .DS_Store
+
+# Environment variables (secrets)
+.env
+.env.*
+!.env.example
+env.sh
 
 .monocle/
 monocle_trace**.json

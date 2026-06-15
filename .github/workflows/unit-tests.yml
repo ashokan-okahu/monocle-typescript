@@ -4,7 +4,8 @@ on:
   push:
     branches: [ main ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, '**' ]
+  workflow_dispatch:
 
 jobs:
   test:
@@ -39,4 +40,61 @@ jobs:
       with:
         name: coverage-report-node-${{ matrix.node-version }}
         path: coverage/
+        retention-days: 7
+
+  integration-test:
+    name: Run Integration Tests
+    runs-on: ubuntu-latest
+    # Integration tests make real, paid LLM API calls and require secrets,
+    # which are unavailable on fork PRs. Only run on manual dispatch or push to main.
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22.x
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Build (produces dist/ required by example apps)
+      run: npm run build
+
+    - name: Run integration tests with HTML report
+      run: npm run test:integration:report
+      env:
+        AZURE_OPENAI_API_DEPLOYMENT: ${{ vars.AZURE_OPENAI_API_DEPLOYMENT }}
+        AZURE_OPENAI_MODEL_DEPLOYMENT_NAME: ${{ vars.AZURE_OPENAI_MODEL_DEPLOYMENT_NAME }}
+        AZURE_OPENAI_API_INSTANCE_NAME: ${{ vars.AZURE_OPENAI_API_INSTANCE_NAME }}
+        AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+        AZURE_OPENAI_API_VERSION: ${{ vars.AZURE_OPENAI_API_VERSION }}
+        AZURE_OPENAI_ENDPOINT: ${{ vars.AZURE_OPENAI_ENDPOINT }}
+        AZURE_OPENAI_ENDPOINT_1: ${{ vars.AZURE_OPENAI_ENDPOINT_1 }}
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        MONOCLE_BLOB_CONNECTION_STRING: ${{ secrets.MONOCLE_BLOB_CONNECTION_STRING }}
+        MONOCLE_BLOB_CONTAINER_NAME: ${{ vars.MONOCLE_BLOB_CONTAINER_NAME }}
+        OPENSEARCH_ENDPOINT_URL_BOTO: ${{ vars.OPENSEARCH_ENDPOINT_URL_BOTO }}
+        OPENSEARCH_ENDPOINT_URL: ${{ vars.OPENSEARCH_ENDPOINT_URL }}
+        OPENSEARCH_ENDPOINT: ${{ vars.OPENSEARCH_ENDPOINT }}
+        OPENSEARCH_DOMAIN: ${{ vars.OPENSEARCH_DOMAIN }}
+        OPENSEARCH_USERNAME: ${{ vars.OPENSEARCH_USERNAME }}
+        OPENSEARCH_PASSWORD: ${{ secrets.OPENSEARCH_PASSWORD }}
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        AWS_ACCESS_KEY_ID_EXPORTER: ${{ secrets.AWS_ACCESS_KEY_ID_EXPORTER }}
+        AWS_SECRET_ACCESS_KEY_EXPORTER: ${{ secrets.AWS_SECRET_ACCESS_KEY_EXPORTER }}
+        MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+
+    - name: Upload integration test report
+      uses: actions/upload-artifact@v4
+      # Attach the report even when tests fail, so failures can be inspected.
+      if: always()
+      with:
+        name: integration-test-report
+        path: reports/integration/
         retention-days: 7
