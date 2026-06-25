@@ -216,6 +216,61 @@ describe('Gemini inference data.input extraction', () => {
 });
 
 // =============================================================================
+// entity attributes — tools declared on the request (3rd entity group)
+// =============================================================================
+describe('Gemini inference tools entity', () => {
+    // The 3rd entity attribute group carries the declared tools: a `name`
+    // (comma-separated tool names) and a `type` ("tool.function"). Extraction reads
+    // the standard @google/genai functionDeclarations shape, so it is
+    // framework-agnostic — the names below are plain genai tool names, not
+    // anything ADK-specific (ADK just happens to prefix its own tool names).
+    const toolsGroup = (geminiInferenceConfig.attributes as any[])[2];
+    const nameAccessor = toolsGroup.find((a: any) => a.attribute === 'name').accessor as (ctx: { args: any[] }) => any;
+    const typeAccessor = toolsGroup.find((a: any) => a.attribute === 'type').accessor as (ctx: { args: any[] }) => any;
+
+    const names = (params: any) => nameAccessor({ args: [params] });
+    const type = (params: any) => typeAccessor({ args: [params] });
+
+    it('extracts function tool names from config.tools (genai shape)', () => {
+        const params = {
+            model: 'gemini-2.5-flash',
+            config: {
+                tools: [{ functionDeclarations: [{ name: 'book_flight' }] }],
+            },
+        };
+        expect(names(params)).toBe('book_flight');
+        expect(type(params)).toBe('tool.function');
+    });
+
+    it('collects names across multiple declarations and tool groups', () => {
+        const params = {
+            config: {
+                tools: [
+                    { functionDeclarations: [{ name: 'book_flight' }, { name: 'cancel_flight' }] },
+                    { functionDeclarations: [{ name: 'check_status' }] },
+                ],
+            },
+        };
+        expect(names(params)).toBe('book_flight, cancel_flight, check_status');
+        expect(type(params)).toBe('tool.function');
+    });
+
+    it('reads tools from the top-level params.tools fallback (snake_case declarations)', () => {
+        const params = {
+            tools: [{ function_declarations: [{ name: 'get_weather' }] }],
+        };
+        expect(names(params)).toBe('get_weather');
+        expect(type(params)).toBe('tool.function');
+    });
+
+    it('returns undefined (entity skipped) when no tools are declared', () => {
+        const params = { model: 'gemini-2.5-flash', contents: 'hi' };
+        expect(names(params)).toBeUndefined();
+        expect(type(params)).toBeUndefined();
+    });
+});
+
+// =============================================================================
 // data.output — text vs function-call response extraction
 // =============================================================================
 describe('Gemini inference data.output extraction', () => {
@@ -276,5 +331,64 @@ describe('Gemini inference data.output extraction', () => {
     it('returns empty string when there is neither text nor a function call', () => {
         const out = extractOutput({ candidates: [{ content: { parts: [] } }] });
         expect(out).toBe('');
+    });
+
+    it('no longer emits status or status_code attributes', () => {
+        const event = (geminiInferenceConfig.events as any[]).find((e) => e.name === 'data.output');
+        const attributeNames = event.attributes.map((a: any) => a.attribute);
+        expect(attributeNames).not.toContain('status');
+        expect(attributeNames).not.toContain('status_code');
+        expect(attributeNames).toEqual(['response']);
+    });
+});
+
+// =============================================================================
+// metadata event — finish_reason / finish_type span attributes (the accessors
+// that emit onto the span, incl. FUNCTION_CALL synthesis when Gemini says STOP)
+// =============================================================================
+describe('Gemini inference finish_reason / finish_type accessors', () => {
+    const metadataAttr = (attribute: string) => {
+        const event = (geminiInferenceConfig.events as any[]).find((e) => e.name === 'metadata');
+        const attr = event.attributes.find((a: any) => a.attribute === attribute);
+        return attr.accessor as (ctx: { response: any }) => any;
+    };
+    const finishReason = (response: any) => metadataAttr('finish_reason')({ response });
+    const finishType = (response: any) => metadataAttr('finish_type')({ response });
+
+    it('emits the raw finishReason for a plain text turn', () => {
+        const response = { candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'done' }] } }] };
+        expect(finishReason(response)).toBe('STOP');
+        expect(finishType(response)).toBe(FinishType.SUCCESS);
+    });
+
+    it('synthesizes FUNCTION_CALL when the response carries a functionCall part (even with finishReason STOP)', () => {
+        // Gemini reports STOP for tool calls; the accessor must rewrite to FUNCTION_CALL / tool_call.
+        const response = {
+            candidates: [{
+                finishReason: 'STOP',
+                content: { parts: [{ functionCall: { name: 'book_flight', args: {} } }] },
+            }],
+        };
+        expect(finishReason(response)).toBe('FUNCTION_CALL');
+        expect(finishType(response)).toBe(FinishType.TOOL_CALL);
+    });
+
+    it('maps MAX_TOKENS through to the truncated finish type', () => {
+        const response = { candidates: [{ finishReason: 'MAX_TOKENS', content: { parts: [{ text: 'cut' }] } }] };
+        expect(finishReason(response)).toBe('MAX_TOKENS');
+        expect(finishType(response)).toBe(FinishType.TRUNCATED);
+    });
+
+    it('returns null finish_reason (and null finish_type) when none is present', () => {
+        const response = { candidates: [{ content: { parts: [{ text: 'no reason' }] } }] };
+        expect(finishReason(response)).toBeNull();
+        expect(finishType(response)).toBeNull();
+    });
+
+    it('returns null for an empty / malformed response', () => {
+        expect(finishReason({})).toBeNull();
+        expect(finishType({})).toBeNull();
+        expect(finishReason(null)).toBeNull();
+        expect(finishType(null)).toBeNull();
     });
 });

@@ -32,6 +32,7 @@ describe('ADK instrumentation', () => {
         const toolSpan = capturedSpans.find((s) => s?.name === 'adk.tool');
         expect(toolSpan, 'expected an adk.tool span to be emitted').toBeDefined();
         expect(toolSpan.attributes['span.type']).toBe('agentic.tool.invocation');
+        expect(toolSpan.attributes['span.subtype']).toBe('content_generation');
         expect(toolSpan.attributes['entity.1.type']).toBe('tool.adk');
         expect(toolSpan.attributes['entity.1.name']).toBe('adk_book_flight');
         expect(toolSpan.attributes['entity.2.type']).toBe('agent.adk');
@@ -56,6 +57,8 @@ describe('ADK instrumentation', () => {
         expect(agentSpan.attributes['span.type']).toBe('agentic.invocation');
         expect(agentSpan.attributes['entity.1.type']).toBe('agent.adk');
         expect(agentSpan.attributes['entity.1.name']).toBe('adk_smoke_agent');
+        // The agentic.invocation entity no longer emits a tools array.
+        expect(agentSpan.attributes['entity.1.tools']).toBeUndefined();
 
         const inputEvent = agentSpan.events.find((e: any) => e.name === 'data.input');
         const outputEvent = agentSpan.events.find((e: any) => e.name === 'data.output');
@@ -125,6 +128,11 @@ describe('ADK instrumentation', () => {
         expect(agent.parent_id).toBe(ephemeral.context.span_id);
         expect(ephemeral.parent_id).toBe(workflow.context.span_id);
         expect(workflow.parent_id == null).toBe(true);
+
+        // The agentic.turn span carries only the entity type — no name/app_name.
+        expect(ephemeral.attributes['entity.1.type']).toBe('agent.adk');
+        expect(ephemeral.attributes['entity.1.name']).toBeUndefined();
+        expect(ephemeral.attributes['entity.1.app_name']).toBeUndefined();
     }, 30000);
 
     it('span.source resolves to the immediate caller per-span (never unknown_source)', async () => {
@@ -147,7 +155,7 @@ describe('ADK instrumentation', () => {
         }
     }, 30000);
 
-    it('delegated sub-agent span carries from_agent / to_agent / from_agent_span_id', async () => {
+    it('delegated sub-agent span carries from_agent / from_agent_span_id', async () => {
         const sample = require('../examples/adkDelegationSample.js');
         await sample.main();
         await new Promise((r) => setTimeout(r, 6000));
@@ -159,14 +167,26 @@ describe('ADK instrumentation', () => {
         expect(supervisor, 'supervisor span').toBeDefined();
         expect(sub, 'sub-agent span').toBeDefined();
 
+        // Both are agentic.invocation / content_processing spans; delegation is
+        // expressed via from_agent on the child, never a to_agent attr.
+        for (const span of [supervisor, sub]) {
+            expect(span.attributes['span.type']).toBe('agentic.invocation');
+            expect(span.attributes['span.subtype']).toBe('content_processing');
+            expect(span.attributes['entity.1.type']).toBe('agent.adk');
+            expect(span.attributes['entity.1.to_agent']).toBeUndefined();
+        }
+
         // Top-level supervisor → no delegation attrs.
         expect(supervisor.attributes['entity.1.from_agent']).toBeUndefined();
-        expect(supervisor.attributes['entity.1.to_agent']).toBeUndefined();
         expect(supervisor.attributes['entity.1.from_agent_span_id']).toBeUndefined();
 
-        // Delegated sub-agent → carries the trio.
+        // Delegated sub-agent → from_agent + from_agent_span_id; the receiving
+        // agent is identified by entity.1.name.
         expect(sub.attributes['entity.1.from_agent']).toBe('adk_supervisor_agent');
-        expect(sub.attributes['entity.1.to_agent']).toBe('adk_sub_agent');
+        expect(sub.attributes['entity.1.name']).toBe('adk_sub_agent');
         expect(sub.attributes['entity.1.from_agent_span_id']).toBe(supervisor.context.span_id);
+
+        // Same delegation chain.
+        expect(sub.context.trace_id).toBe(supervisor.context.trace_id);
     }, 30000);
 });
